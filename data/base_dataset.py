@@ -60,6 +60,11 @@ class BaseDataset(data.Dataset, ABC):
         pass
 
 
+class GlobalTransParams:
+    crop_pos = (0, 0)
+    flip = True
+
+
 def get_params(opt, size):
     w, h = size
     new_h = h
@@ -78,7 +83,8 @@ def get_params(opt, size):
     return {'crop_pos': (x, y), 'flip': flip}
 
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
+def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC,
+                  custom_img_fun=None, convert=True, normal_params=None, custom_tensor_fun=None):
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
@@ -91,6 +97,8 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
     if 'crop' in opt.preprocess:
         if params is None:
             transform_list.append(transforms.RandomCrop(opt.crop_size))
+        elif params['crop_global']:
+            transform_list.append(transforms.Lambda(lambda img: __crop_global(img, opt.crop_size)))
         else:
             transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.crop_size)))
 
@@ -100,15 +108,32 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
     if not opt.no_flip:
         if params is None:
             transform_list.append(transforms.RandomHorizontalFlip())
-        elif params['flip']:
+        elif 'flip' in params:
             transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
+        elif 'flip_global' in params:
+            transform_list.append(transforms.Lambda(lambda img: __flip_global(img)))
+
+    if custom_img_fun is not None:
+        if params is None or 'custom_img_params' not in params:
+            transform_list.append(transforms.Lambda(lambda img: custom_img_fun(img)))
+        else:
+            transform_list.append(transforms.Lambda(lambda img: custom_img_fun(img, params['custom_img_params'])))
 
     if convert:
         transform_list += [transforms.ToTensor()]
-        if grayscale:
-            transform_list += [transforms.Normalize((0.5,), (0.5,))]
+        if normal_params is None:
+            if grayscale:
+                transform_list += [transforms.Normalize((0.5,), (0.5,))]
+            else:
+                transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        elif normal_params['need_norm']:
+            transform_list += [transforms.Normalize(normal_params['mean'], normal_params['std'])]
+
+    if custom_tensor_fun is not None:
+        if params is None or 'custom_tensor_params' not in params:
+            transform_list.append(transforms.Lambda(lambda img: custom_tensor_fun(img)))
         else:
-            transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+            transform_list.append(transforms.Lambda(lambda img: custom_tensor_fun(img, params['custom_tensor_params'])))
     return transforms.Compose(transform_list)
 
 
@@ -136,13 +161,28 @@ def __crop(img, pos, size):
     ow, oh = img.size
     x1, y1 = pos
     tw = th = size
-    if (ow > tw or oh > th):
+    if ow > tw or oh > th:
         return img.crop((x1, y1, x1 + tw, y1 + th))
     return img
 
 
 def __flip(img, flip):
     if flip:
+        return img.transpose(Image.FLIP_LEFT_RIGHT)
+    return img
+
+
+def __crop_global(img, size):
+    ow, oh = img.size
+    x1, y1 = GlobalTransParams.crop_pos
+    tw = th = size
+    if ow > tw or oh > th:
+        return img.crop((x1, y1, x1 + tw, y1 + th))
+    return img
+
+
+def __flip_global(img):
+    if GlobalTransParams.flip:
         return img.transpose(Image.FLIP_LEFT_RIGHT)
     return img
 
