@@ -59,6 +59,21 @@ def create_dataset(opt):
     return dataset
 
 
+def create_dataset_params(opt, params):
+    """Create a dataset given the option.
+
+    This function wraps the class CustomDatasetDataLoader.
+        This is the main interface between this package and 'train.py'/'test.py'
+
+    Example:
+        >>> from data import create_dataset
+        >>> dataset = create_dataset(opt)
+    """
+    data_loader = CustomParamsDatasetDataLoader(opt, params)
+    dataset = data_loader.load_data()
+    return dataset
+
+
 class CustomDatasetDataLoader():
     """Wrapper class of Dataset class that performs multi-threaded data loading"""
 
@@ -75,6 +90,54 @@ class CustomDatasetDataLoader():
         self.dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=opt.batch_size,
+            shuffle=not opt.no_shuffle,
+            num_workers=int(opt.num_threads))
+
+    def load_data(self):
+        return self
+
+    def __len__(self):
+        """Return the number of data in the dataset"""
+        return min(len(self.dataset), self.opt.max_dataset_size)
+
+    def __iter__(self):
+        """Return a batch of data"""
+        for i, data in enumerate(self.dataloader):
+            if i * self.opt.batch_size >= self.opt.max_dataset_size:
+                break
+            yield data
+
+
+class CustomParamsDatasetDataLoader():
+    """Wrapper class of Dataset class that performs multi-threaded data loading"""
+
+    def __init__(self, opt, params):
+        """Initialize this class
+
+        Step 1: create a dataset instance given the name [dataset_mode]
+        Step 2: create a multi-threaded data loader.
+        """
+        self.opt = opt
+
+        if 'batch_size' in params:
+            batch_size = params['batch_size']
+        else:
+            batch_size = opt.batch_size
+
+        if 'transmit_params' in params:
+            transmit_params = params['transmit_params']
+        else:
+            transmit_params = False
+
+        dataset_class = find_dataset_using_name(opt.dataset_mode)
+        if transmit_params:
+            self.dataset = dataset_class(opt, ext_params=params)
+        else:
+            self.dataset = dataset_class(opt)
+        print("dataset [%s] was created" % type(self.dataset).__name__)
+        self.dataloader = torch.utils.data.DataLoader(
+            self.dataset,
+            batch_size=batch_size,
             shuffle=not opt.no_shuffle,
             num_workers=int(opt.num_threads))
 

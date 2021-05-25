@@ -1,10 +1,12 @@
 import torch
+import itertools
 from .base_model import BaseModel
 from . import networks
+from data import create_dataset, create_dataset_params
 import cv2 as cv
 
 
-class Pix2PixRandomAndMaskModel(BaseModel):
+class Pix2PixCtrlstickBgfusionModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -30,14 +32,17 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         By default, we use vanilla GAN loss, UNet with batchnorm, and aligned datasets.
         """
         # changing the default values to match the pix2pix paper (https://phillipi.github.io/pix2pix/)
-        parser.set_defaults(norm='batch', netG='unet_random_and_mask_256', dataset_mode='aligned')
+        parser.set_defaults(norm='batch', netG='post_mask_unet_256', dataset_mode='aligned')
         # Custom parameters
+        parser.add_argument('--netStage1', type=str, default='mask_collection_256', help='specify generator architecture in stage 1')
         parser.add_argument('--mask_L1_loss', action='store_true', help='if specified, calculate L1 on mask area only')
         parser.add_argument('--random_background', action='store_true', help='if specified, fill random number in area without mask')
         parser.add_argument('--net_branch_num', type=int, default=3, help='the branch num of network')
         parser.add_argument('--enrich_background', action='store_true', help='if specified, generate more data in background')
         parser.add_argument('--background_color', type=int, default=244, help='the background color of input data')
         parser.add_argument('--use_controlling_stick', action='store_true', help='if specified, use controlling stick to generate the image')
+        parser.add_argument('--fusion_controlling_stick', action='store_true', help='if specified, create fusion controlling stick')
+        parser.add_argument('--extract_dataroot', type=str, default='./datasets/skestrt', help='the data set used to extract additional image')
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
             parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
@@ -65,14 +70,26 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         self.enrich_background = opt.enrich_background
         # Use controlling stick
         self.use_controlling_stick = opt.use_controlling_stick
+        # Use fusion controlling stick
+        self.fusion_controlling_stick = opt.fusion_controlling_stick
+        # Create data set for fusion
+        ext_params = {'batch_size': 1, 'transmit_params': True, 'mini_out': True,
+                      'use_extract_dataroot': True}
+        self.dataset = create_dataset_params(opt, ext_params)
+        self.dataset_iter = iter(self.dataset)
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         if self.isTrain:
-            self.model_names = ['G', 'D']
+            self.model_names = ['Stage1', 'G', 'D']
         else:  # during test time, only load G
-            self.model_names = ['G']
-        # define networks (both generator and discriminator)
+            self.model_names = ['Stage1', 'G']
+
+        # define networks stage 1 generator
+        self.netStage1 = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netStage1, opt.net_branch_num, opt.norm,
+                                               not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+
+        # define networks generator
         self.netG = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.net_branch_num, opt.norm,
-                                      not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+                                          not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:  # define a discriminator; conditional GANs need to take both input and output images; Therefore, #channels for D is input_nc + output_nc
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
@@ -83,7 +100,7 @@ class Pix2PixRandomAndMaskModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
-            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_G = torch.optim.Adam(itertools.chain(self.netStage1.parameters(), self.netG.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
@@ -105,17 +122,38 @@ class Pix2PixRandomAndMaskModel(BaseModel):
             self.real_AB_mask = self.real_A_mask
             self.real_AB_mask[self.real_B_mask >= 1] = 1
         if self.random_background:
-            self.random_bg = input['random_bg']
+            self.random_bg = input['random_bg'].to(self.device)
         if self.use_controlling_stick:
-            self.controlling_stick = input['controlling_stick']
+            self.controlling_stick = input['controlling_stick'].to(self.device)
+            if self.fusion_controlling_stick:
+                self.fusion_ctrlstick = input['fusion_ctrlstick'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
+        self.get_fusion_data()
+
+    def get_fusion_data(self):
+        AtoB = self.opt.direction == 'AtoB'
+        data = next(self.dataset_iter, None)
+        if data is None:
+            self.dataset_iter = iter(self.dataset)
+            data = next(self.dataset_iter)
+        self.fusion_A = data['A' if AtoB else 'B'].to(self.device)
+        self.fusion_A_mask = data['A_mask' if AtoB else 'B_mask'].to(self.device)
+        if self.mask_loss:
+            self.fusion_B_mask = data['B_mask' if AtoB else 'A_mask'].to(self.device)
+            self.fusion_AB_mask = self.fusion_A_mask
+            self.fusion_AB_mask[self.fusion_B_mask >= 1] = 1
+            self.real_AB_mask = self.real_AB_mask + self.fusion_AB_mask
+            self.real_AB_mask[self.real_AB_mask >= 2] = 0
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         if self.random_background and not self.use_controlling_stick:
             self.fake_B = self.netG(self.real_A, self.real_A_mask, self.random_bg)  # G(A)
         elif self.random_background and self.use_controlling_stick:
-            self.fake_B = self.netG(self.real_A, self.controlling_stick, self.random_bg)  # G(A)
+            self.ctrl_B = self.netStage1(self.real_A, self.controlling_stick, self.random_bg)
+            fusion_B = self.netStage1(self.fusion_A, self.fusion_ctrlstick, self.random_bg)
+            self.ctrl_B = self.ctrl_B + fusion_B
+            self.fake_B = self.netG(self.ctrl_B)  # G(A)
         else:
             self.fake_B = self.netG(self.real_A, self.real_A_mask)  # G(A)
 

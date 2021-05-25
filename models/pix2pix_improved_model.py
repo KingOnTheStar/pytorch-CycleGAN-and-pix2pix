@@ -37,6 +37,7 @@ class Pix2PixImprovedModel(BaseModel):
             parser.add_argument('--mask_L1_loss', action='store_true', help='if specified, calculate L1 on mask area only')
             parser.add_argument('--random_background', action='store_true', help='if specified, fill random number in area without mask')
             parser.add_argument('--net_branch_num', type=int, default=3, help='the branch num of network')
+            parser.add_argument('--background_color', type=int, default=244, help='the background color of input data')
 
         return parser
 

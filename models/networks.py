@@ -204,6 +204,10 @@ def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num, norm='batch', u
         net = UnetAttentionMaskGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'unet_random_and_mask_256':
         net = UnetRandomAndMaskGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'post_mask_unet_256':
+        net = PostMaskUnetGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'mask_collection_256':
+        net = MaskCollectionGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
