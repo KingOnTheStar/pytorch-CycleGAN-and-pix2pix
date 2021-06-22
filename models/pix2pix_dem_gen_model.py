@@ -1,10 +1,12 @@
 import torch
 from .base_model import BaseModel
 from . import networks
+import kornia
 import cv2 as cv
+from losses.directional_derivative_loss import DirectionalDerivativeLoss
 
 
-class Pix2PixRandomAndMaskModel(BaseModel):
+class Pix2PixDemGenModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -30,17 +32,28 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         By default, we use vanilla GAN loss, UNet with batchnorm, and aligned datasets.
         """
         # changing the default values to match the pix2pix paper (https://phillipi.github.io/pix2pix/)
-        parser.set_defaults(norm='batch', netG='unet_random_and_mask_256', dataset_mode='aligned')
+        parser.set_defaults(norm='batch', netG='unet_256', dataset_mode='aligned')
         # Custom parameters
-        parser.add_argument('--mask_L1_loss', action='store_true', help='if specified, calculate L1 on mask area only')
-        parser.add_argument('--random_background', action='store_true', help='if specified, fill random number in area without mask')
-        parser.add_argument('--net_branch_num', type=int, default=3, help='the branch num of network')
-        parser.add_argument('--enrich_background', action='store_true', help='if specified, generate more data in background')
         parser.add_argument('--background_color', type=int, default=244, help='the background color of input data')
-        parser.add_argument('--use_controlling_stick', action='store_true', help='if specified, use controlling stick to generate the image')
+        parser.add_argument('--mask_L1_loss', action='store_true', help='if specified, calculate L1 on mask area only')
+        parser.add_argument('--cal_road_perpendicular_line', action='store_true', help='if specified, calculate road perpendicular line')
+        parser.add_argument('--cal_water_area_mask', action='store_true', help='if specified, calculate water area mask')
+        parser.add_argument('--tv_loss', action='store_true', help='if specified, add total variation regularization term')
+        parser.add_argument('--dd_loss', action='store_true', help='if specified, add directional derivative regularization term')
+        parser.add_argument('--avghi_loss', action='store_true', help='if specified, add loss to restrain the average height of output dem')
+        parser.add_argument('--water_area_loss', action='store_true', help='if specified, add water area loss term')
+        parser.add_argument('--add_inner_random', action='store_true', help='if specified, add random number to the inner network')
+        parser.add_argument('--add_inner_random_netG', type=str, default='inner_random_net_256', help='netG used with --add_inner_random parameter')
+        parser.add_argument('--inner_random_nc', type=int, default=64, help='the channel number of inner_random')
+        parser.add_argument('--average_height', type=int, default=-1, help='0-255, the average height of generated dem img, if < 0 ,use the average height of real dem')
+        parser.add_argument('--water_area_edge_hidiff', type=int, default=0.1, help='the target height difference of water area and edge')
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
             parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
+            parser.add_argument('--lambda_vtreg', type=float, default=0.0001, help='weight for TV regularization term')
+            parser.add_argument('--lambda_ddreg', type=float, default=100.0, help='weight for DD regularization term')
+            parser.add_argument('--lambda_avghi', type=float, default=30.0, help='weight for average height loss')
+            parser.add_argument('--lambda_wam', type=float, default=100.0, help='weight for water area and edge loss')
 
         return parser
 
@@ -52,27 +65,36 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         """
         BaseModel.__init__(self, opt)
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
-        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake']
+        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake', 'reg']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
         self.visual_names = ['real_A', 'fake_B', 'real_B']
         # Whether use L1 mask loss
         self.mask_loss = opt.mask_L1_loss
-        # Whether set background random
-        self.random_background = opt.random_background
-        # The color of background
-        self.normal_bg_color = opt.background_color / 255.0
-        # Need enrich background
-        self.enrich_background = opt.enrich_background
-        # Use controlling stick
-        self.use_controlling_stick = opt.use_controlling_stick
+        # Whether use variation regularization term
+        self.tv_loss = opt.tv_loss
+        # Whether use directional derivative term
+        self.dd_loss = opt.dd_loss
+        # Whether use average height loss
+        self.avghi_loss = opt.avghi_loss
+        # Whether use water area loss
+        self.water_area_loss = opt.water_area_loss
+        # Whether add random number
+        self.add_inner_random = opt.add_inner_random
+        # The target height difference of water area and edge
+        self.water_area_edge_hidiff = opt.water_area_edge_hidiff
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         if self.isTrain:
             self.model_names = ['G', 'D']
         else:  # during test time, only load G
             self.model_names = ['G']
         # define networks (both generator and discriminator)
-        self.netG = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, net_branch_num=opt.net_branch_num,
-                                          norm=opt.norm, use_dropout=not opt.no_dropout, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
+        if self.add_inner_random:
+            inner_ap_nc = opt.inner_random_nc + (1 if self.avghi_loss else 0)
+            self.netG = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.add_inner_random_netG, inner_ap_nc=inner_ap_nc,
+                                              norm=opt.norm, use_dropout=not opt.no_dropout, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
+        else:
+            self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
+                                          not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:  # define a discriminator; conditional GANs need to take both input and output images; Therefore, #channels for D is input_nc + output_nc
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,
@@ -82,11 +104,19 @@ class Pix2PixRandomAndMaskModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
+            self.tv_regularization_term = kornia.losses.TotalVariation()
+            self.dd_regularization_term = DirectionalDerivativeLoss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+
+    def set_preinput(self, preinput):
+        AtoB = self.opt.direction == 'AtoB'
+        self.real_A_norm = preinput['A_norm' if AtoB else 'B_norm']
+        self.real_B_norm = preinput['B_norm' if AtoB else 'A_norm']
+        self.fake_B_norm = self.real_B_norm
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -99,25 +129,28 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
-        self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
         if self.mask_loss:
-            self.real_B_mask = input['B_mask' if AtoB else 'A_mask'].to(self.device)
-            self.real_AB_mask = self.real_A_mask
-            self.real_AB_mask[self.real_B_mask >= 1] = 1
-        if self.random_background:
-            self.random_bg = input['random_bg']
-        if self.use_controlling_stick:
-            self.controlling_stick = input['controlling_stick']
+            self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
+        if self.dd_loss:
+            self.rpl_img = input['rpl'].to(self.device)
+        if self.water_area_loss:
+            self.wam_area_img = input['wam_area'].to(self.device)
+            self.wam_edge_img = input['wam_edge'].to(self.device)
+        if self.add_inner_random:
+            self.inner_random = input['inner_random'].to(self.device)
+        if self.avghi_loss:
+            self.avg_height = input['avg_height'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        if self.random_background and not self.use_controlling_stick:
-            self.fake_B = self.netG(self.real_A, self.real_A_mask, self.random_bg)  # G(A)
-        elif self.random_background and self.use_controlling_stick:
-            self.fake_B = self.netG(self.real_A, self.controlling_stick, self.random_bg)  # G(A)
+        if not self.avghi_loss and self.add_inner_random:
+            self.fake_B = self.netG(self.real_A, self.inner_random)  # G(A)
+        elif self.avghi_loss and self.add_inner_random:
+            inner_ap = torch.cat((self.inner_random, self.avg_height), 1)
+            self.fake_B = self.netG(self.real_A, inner_ap)  # G(A)
         else:
-            self.fake_B = self.netG(self.real_A, self.real_A_mask)  # G(A)
+            self.fake_B = self.netG(self.real_A)  # G(A)
 
     def backward_D(self):
         """Calculate GAN loss for the discriminator"""
@@ -141,24 +174,32 @@ class Pix2PixRandomAndMaskModel(BaseModel):
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
         # Second, G(A) = B
         if self.mask_loss:
-            self.loss_G_L1 = self.criterionL1(self.real_AB_mask * self.fake_B,
-                                              self.real_AB_mask * self.real_B) * self.opt.lambda_L1
+            self.loss_G_L1 = self.criterionL1(self.real_A_mask * self.fake_B,
+                                              self.real_A_mask * self.real_B) * self.opt.lambda_L1
         else:
             self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
-        # Third, BGMask(G(A)) should not only like background
-        if self.enrich_background:
-            # fake_bg = (1 - self.real_AB_mask) * self.fake_B + self.real_AB_mask * self.normal_bg_color
-            # fake_Abg = torch.cat((self.real_A, fake_bg), 1)
-            # pred_fake_bg = self.netD(fake_Abg)
-            # self.loss_G_bg_GAN = self.criterionGAN(pred_fake_bg, True)
-            # diff_gap = 0
-            # diff = torch.sum(torch.pow(fake_bg - self.normal_bg_color, 2))
-            # self.loss_G_bg_GAN += (diff - diff_gap) * 0.001
-            pass
-        else:
-            self.loss_G_bg_GAN = 0
+
+        # Regularization term
+        self.loss_reg = 0
+        if self.tv_loss:
+            loss_tv = self.tv_regularization_term(self.fake_B) * self.opt.lambda_vtreg
+            self.loss_reg += loss_tv
+        if self.dd_loss:
+            loss_dd = self.dd_regularization_term(self.fake_B, self.rpl_img) * self.opt.lambda_ddreg
+            self.loss_reg += loss_dd
+        if self.avghi_loss:
+            loss_avghi = (torch.mean(self.avg_height.abs()) - torch.mean(self.fake_B.abs())).abs() * self.opt.lambda_avghi
+            self.loss_reg += loss_avghi
+        if self.water_area_loss:
+            wam_area_pixel_num = torch.sum(self.wam_area_img)
+            wam_edge_pixel_num = torch.sum(self.wam_edge_img)
+            wam_area_hi = torch.sum(self.fake_B * self.wam_area_img) / (wam_area_pixel_num + 1e-27)
+            wam_edge_hi = torch.sum(self.fake_B * self.wam_edge_img) / (wam_edge_pixel_num + 1e-27)
+            loss_wam = ((wam_area_hi - wam_edge_hi).abs() - self.water_area_edge_hidiff).abs() * self.opt.lambda_wam
+            loss_wam *= wam_area_pixel_num / (wam_area_pixel_num + 1e-27) * wam_edge_pixel_num / (wam_edge_pixel_num + 1e-27)
+            self.loss_reg += loss_wam
         # combine loss and calculate gradients
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_reg
         self.loss_G.backward()
 
     def optimize_parameters(self):

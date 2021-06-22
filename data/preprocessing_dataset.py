@@ -64,14 +64,22 @@ class PreprocessingDataset(BaseDataset):
                                    self.create_controlling_stick(controlling_stick_st=4)]
 
         params = {'crop_global': True, 'flip_global': True}
-        self.transform_A = get_transform(self.opt, params=params, grayscale=(input_nc == 1))
-        self.transform_B = get_transform(self.opt, params=params, grayscale=(output_nc == 1))
+        # strt_normal_params = {'need_norm': True, 'mean': (0.93862105, 0.92735193, 0.91676961),
+        #                       'std': (0.09131372, 0.07778802, 0.09467436)}
+        # ske_normal_params = {'need_norm': True, 'mean': (0.94733519, 0.94461033, 0.93095495),
+        #                      'std': (0.06121866, 0.04198355, 0.07838381)}
+        strt_normal_params = {'need_norm': True, 'mean': (0.5, 0.5, 0.5),
+                              'std': (0.5, 0.5, 0.5)}
+        ske_normal_params = {'need_norm': True, 'mean': (0.5, 0.5, 0.5),
+                             'std': (0.5, 0.5, 0.5)}
+        self.transform_A = get_transform(self.opt, params=params, grayscale=(input_nc == 1), normal_params=strt_normal_params)
+        self.transform_B = get_transform(self.opt, params=params, grayscale=(output_nc == 1), normal_params=ske_normal_params)
         self.transform_A_mask = get_transform(self.opt, params=params, grayscale=True,
                                               normal_params={'need_norm': False},
-                                              custom_tensor_fun=self.preprocessing, )
+                                              custom_tensor_fun=self.preprocessing)
         self.transform_B_mask = get_transform(self.opt, params=params, grayscale=True,
                                               normal_params={'need_norm': False},
-                                              custom_tensor_fun=self.preprocessing, )
+                                              custom_tensor_fun=self.preprocessing)
 
     def __getitem__(self, index):
         """Return a data point and its metadata information.

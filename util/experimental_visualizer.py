@@ -5,6 +5,7 @@ import ntpath
 import time
 from . import util, html
 from subprocess import Popen, PIPE
+import pandas as pd
 
 
 if sys.version_info[0] == 2:
@@ -13,7 +14,7 @@ else:
     VisdomExceptionBase = ConnectionError
 
 
-def save_images(webpage, visuals_and_norms, image_path, aspect_ratio=1.0, width=256):
+def save_images(webpage, visuals_and_norms, extra_data, image_path, image_idx=0, aspect_ratio=1.0, width=256):
     """Save images to the disk.
 
     Parameters:
@@ -42,6 +43,18 @@ def save_images(webpage, visuals_and_norms, image_path, aspect_ratio=1.0, width=
         ims.append(image_name)
         txts.append(label)
         links.append(image_name)
+
+    # save extra data to the disk
+    data_path = os.path.join(image_dir, 'Z_extra_data.csv')
+    columns = ['name', 'hidiff']
+    if image_idx == 0:
+        df = pd.DataFrame([], columns=columns)
+        df.to_csv(data_path, index=False)
+    for label, data in extra_data.items():
+        append_df = pd.DataFrame(
+            [[name, data['hidiff'].argmax().item()]],
+            columns=columns)
+        append_df.to_csv(data_path, mode='a', header=False, index=False)
     webpage.add_images(ims, txts, links, width=width)
 
 
@@ -97,7 +110,7 @@ class Visualizer():
         print('Command: %s' % cmd)
         Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
 
-    def display_current_results(self, visuals_and_norms, epoch, save_result):
+    def display_current_results(self, visuals_and_norms, extra_data, epoch, save_result):
         """Display current results on visdom; save current results to an HTML file.
 
         Parameters:

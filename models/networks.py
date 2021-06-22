@@ -161,7 +161,7 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     return init_net(net, init_type, init_gain, gpu_ids)
 
 
-def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num=3, inner_ap_nc=0, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     """Create a generator
 
     Parameters:
@@ -170,6 +170,7 @@ def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num, norm='batch', u
         ngf (int) -- the number of filters in the last conv layer
         netG (str) -- the architecture's name: resnet_9blocks | resnet_6blocks | unet_256 | unet_128
         net_branch_num (int) -- the branch num of network
+        inner_ap_nc (int) -- the channel number of inner append vector
         norm (str) -- the name of normalization layers used in the network: batch | instance | none
         use_dropout (bool) -- if use dropout layers.
         init_type (str)    -- the name of our initialization method.
@@ -208,6 +209,14 @@ def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num, norm='batch', u
         net = PostMaskUnetGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'mask_collection_256':
         net = MaskCollectionGenerator(input_nc, output_nc, 8, net_branch_num, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'inner_random_net_256':
+        net = UnetInnerRandomGenerator(input_nc, output_nc, 8, ngf, inner_ap_nc, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'downsampling_resnet_branch_9blocks':
+        net = DownsamplingResnetBranchGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+    elif netG == 'upsampling_resnet_branch_9blocks':
+        net = UpsamplingResnetBranchGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+    elif netG == 'label_resnet_branch_9blocks':
+        net = LabelBranchGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)

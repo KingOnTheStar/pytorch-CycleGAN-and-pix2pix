@@ -39,6 +39,7 @@ class BaseModel(ABC):
         self.loss_names = []
         self.model_names = []
         self.visual_names = []
+        self.extra_data_names = []
         self.optimizers = []
         self.image_paths = []
         self.metric = 0  # used for learning rate policy 'plateau'
@@ -88,6 +89,9 @@ class BaseModel(ABC):
             self.load_networks(load_suffix)
         self.print_networks(opt.verbose)
 
+    def set_preinput(self, preinput):
+        pass
+
     def eval(self):
         """Make models eval mode during test time"""
         for name in self.model_names:
@@ -132,6 +136,26 @@ class BaseModel(ABC):
             if isinstance(name, str):
                 visual_ret[name] = getattr(self, name)
         return visual_ret
+
+    def get_current_visuals_with_norm(self):
+        """Return visualization images. train.py will display these images with visdom, and save the images to a HTML"""
+        visual_ret = OrderedDict()
+        norm_ret = OrderedDict()
+        for visual_name in self.visual_names:
+            if isinstance(visual_name, str):
+                visual_ret[visual_name] = getattr(self, visual_name)
+                norm_name = visual_name + '_norm'
+                if isinstance(norm_name, str):
+                    norm_ret[visual_name] = getattr(self, norm_name, None)
+        return {'visuals': visual_ret, 'norms': norm_ret}
+
+    def get_current_extra_data(self):
+        "Return extra data"
+        extra_data_ret = OrderedDict()
+        for extra_data_name in self.extra_data_names:
+            if isinstance(extra_data_name, str):
+                extra_data_ret[extra_data_name] = getattr(self, extra_data_name)
+        return extra_data_ret
 
     def get_current_losses(self):
         """Return traning losses / errors. train.py will print out these errors on console, and save them to a file"""

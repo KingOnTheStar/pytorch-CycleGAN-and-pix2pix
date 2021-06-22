@@ -107,6 +107,9 @@ class CustomDatasetDataLoader():
                 break
             yield data
 
+    def get_preinput(self):
+        return self.dataset.get_preinput()
+
 
 class CustomParamsDatasetDataLoader():
     """Wrapper class of Dataset class that performs multi-threaded data loading"""

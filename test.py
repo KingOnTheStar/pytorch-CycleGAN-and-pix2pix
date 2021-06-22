@@ -30,7 +30,7 @@ import os
 from options.test_options import TestOptions
 from data import create_dataset
 from models import create_model
-from util.visualizer import save_images
+from util.experimental_visualizer import save_images
 from util import html
 
 
@@ -45,6 +45,7 @@ if __name__ == '__main__':
     dataset = create_dataset(opt)  # create a dataset given opt.dataset_mode and other options
     model = create_model(opt)      # create a model given opt.model and other options
     model.setup(opt)               # regular setup: load and print networks; create schedulers
+    model.set_preinput(dataset.get_preinput())  # set preliminary information
     # create a website
     web_dir = os.path.join(opt.results_dir, opt.name, '{}_{}'.format(opt.phase, opt.epoch))  # define the website directory
     if opt.load_iter > 0:  # load_iter is 0 by default
@@ -61,9 +62,10 @@ if __name__ == '__main__':
             break
         model.set_input(data)  # unpack data from data loader
         model.test()           # run inference
-        visuals = model.get_current_visuals()  # get image results
+        visuals = model.get_current_visuals_with_norm()  # get image results
+        extra_data = model.get_current_extra_data()
         img_path = model.get_image_paths()     # get image paths
         if i % 5 == 0:  # save images to an HTML file
             print('processing (%04d)-th image... %s' % (i, img_path))
-        save_images(webpage, visuals, img_path, aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
+        save_images(webpage, visuals, extra_data, img_path, image_idx=i, aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
     webpage.save()  # save the HTML

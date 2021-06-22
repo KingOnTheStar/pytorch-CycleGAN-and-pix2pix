@@ -84,12 +84,14 @@ class Pix2PixCtrlstickBgfusionModel(BaseModel):
             self.model_names = ['Stage1', 'G']
 
         # define networks stage 1 generator
-        self.netStage1 = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netStage1, opt.net_branch_num, opt.norm,
-                                               not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+        stage1_out = 6
+
+        self.netStage1 = networks.define_exp_G(opt.input_nc, stage1_out, opt.ngf, opt.netStage1, net_branch_num=opt.net_branch_num, norm=opt.norm,
+                                               use_dropout=not opt.no_dropout, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
 
         # define networks generator
-        self.netG = networks.define_exp_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.net_branch_num, opt.norm,
-                                          not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+        self.netG = networks.define_exp_G(stage1_out, opt.output_nc, opt.ngf, opt.netG, net_branch_num=opt.net_branch_num, norm=opt.norm,
+                                          use_dropout=not opt.no_dropout, init_type=opt.init_type, init_gain=opt.init_gain, gpu_ids=self.gpu_ids)
 
         if self.isTrain:  # define a discriminator; conditional GANs need to take both input and output images; Therefore, #channels for D is input_nc + output_nc
             self.netD = networks.define_D(opt.input_nc + opt.output_nc, opt.ndf, opt.netD,

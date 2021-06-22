@@ -22,7 +22,7 @@ import time
 from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
-from util.visualizer import Visualizer
+from util.experimental_visualizer import Visualizer
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()   # get training options
@@ -32,6 +32,7 @@ if __name__ == '__main__':
 
     model = create_model(opt)      # create a model given opt.model and other options
     model.setup(opt)               # regular setup: load and print networks; create schedulers
+    model.set_preinput(dataset.get_preinput())  # set preliminary information
     visualizer = Visualizer(opt)   # create a visualizer that display/save images and plots
     total_iters = 0                # the total number of training iterations
 
@@ -54,7 +55,7 @@ if __name__ == '__main__':
             if total_iters % opt.display_freq == 0:   # display images on visdom and save images to a HTML file
                 save_result = total_iters % opt.update_html_freq == 0
                 model.compute_visuals()
-                visualizer.display_current_results(model.get_current_visuals(), epoch, save_result)
+                visualizer.display_current_results(model.get_current_visuals_with_norm(), model.get_current_extra_data(), epoch, save_result)
 
             if total_iters % opt.print_freq == 0:    # print training losses and save logging information to the disk
                 losses = model.get_current_losses()

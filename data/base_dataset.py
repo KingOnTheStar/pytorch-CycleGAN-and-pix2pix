@@ -59,6 +59,9 @@ class BaseDataset(data.Dataset, ABC):
         """
         pass
 
+    def get_preinput(self):
+        return None
+
 
 class GlobalTransParams:
     crop_pos = (0, 0)
