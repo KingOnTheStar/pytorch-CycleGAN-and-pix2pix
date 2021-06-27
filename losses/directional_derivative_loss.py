@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import  numpy as np
 import cv2 as cv
 
 
@@ -22,15 +23,20 @@ class DirectionalDerivativeLoss(nn.Module):
         # 2 = 10 --> normalized_v[0] is positive and normalized_v[1] are negative
         # 3 = 11 --> normalized_v[0] and normalized_v[1] are all negative
         sign_mtx = (255 * directional_deri_img[..., 2:, :-1, :-1]).int()  # directional_deri_img is in [0, 1]
-        directional_deri_img[..., 0:1, :-1, :-1][sign_mtx & 1 == 1] *= -1
-        directional_deri_img[..., 1:2, :-1, :-1][sign_mtx & (1 << 1) == (1 << 1)] *= -1
+        dd_vec_x = directional_deri_img[..., 0:1, :-1, :-1]
+        dd_vec_y = directional_deri_img[..., 1:2, :-1, :-1]
 
-        directional_deri_img = directional_deri_img[..., :-1, :-1, :-1]
-        pixel_diff = self.img_variation(img)
-        dd_loss_mat = pixel_diff * directional_deri_img
+        dd_vec_x[sign_mtx & 1 == 1] *= -1
+        dd_vec_y[sign_mtx & (1 << 1) == (1 << 1)] *= -1
+
+        pixel_difw, pixel_difh = self.img_variation(img)
+        dd_doted_x = pixel_difw * dd_vec_x
+        dd_doted_y = pixel_difh * dd_vec_y
+
+        dd_loss_mat = torch.pow(dd_doted_x, 2) + torch.pow(dd_doted_y, 2)
 
         reduce_axes = (-3, -2, -1)
-        res = dd_loss_mat.abs().sum(dim=reduce_axes)
+        res = dd_loss_mat.sum(dim=reduce_axes)
         return res
 
     def img_variation(self, img):
@@ -41,6 +47,4 @@ class DirectionalDerivativeLoss(nn.Module):
 
         pixel_difh = img[..., 1:, :-1] - img[..., :-1, :-1]
         pixel_difw = img[..., :-1, 1:] - img[..., :-1, :-1]
-
-        pixel_diff = torch.cat((pixel_difw, pixel_difh), -3)
-        return pixel_diff
+        return pixel_difw, pixel_difh
