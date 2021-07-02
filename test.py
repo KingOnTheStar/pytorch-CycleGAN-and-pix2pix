@@ -32,6 +32,7 @@ from data import create_dataset
 from models import create_model
 from util.experimental_visualizer import save_images
 from util import html
+import cv2 as cv
 
 
 if __name__ == '__main__':
@@ -62,7 +63,7 @@ if __name__ == '__main__':
             break
         model.set_input(data)  # unpack data from data loader
         model.test()           # run inference
-        visuals = model.get_current_visuals_with_norm()  # get image results
+        visuals = model.get_current_visuals_with_norm()  # get image resultss
         extra_data = model.get_current_extra_data()
         img_path = model.get_image_paths()     # get image paths
         if i % 5 == 0:  # save images to an HTML file

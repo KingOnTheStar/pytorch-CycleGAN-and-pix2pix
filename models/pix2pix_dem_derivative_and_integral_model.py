@@ -5,9 +5,12 @@ from . import networks
 import kornia
 import cv2 as cv
 from losses.directional_derivative_loss import DirectionalDerivativeLoss
+from losses.integ_independ_path_loss import IntegIndepenPathLoss
+from collections import OrderedDict
+from data.complex_data_processing.integral_grad import *
 
 
-class Pix2PixDemHidiffGenModel(BaseModel):
+class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -60,6 +63,7 @@ class Pix2PixDemHidiffGenModel(BaseModel):
             parser.add_argument('--lambda_ddreg', type=float, default=1.0, help='weight for DD regularization term')
             parser.add_argument('--lambda_avghi', type=float, default=30.0, help='weight for average height loss')
             parser.add_argument('--lambda_wam', type=float, default=100.0, help='weight for water area and edge loss')
+            parser.add_argument('--lambda_integ', type=float, default=1.0, help='weight for integral independ to path loss')
 
         return parser
 
@@ -71,12 +75,10 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         """
         BaseModel.__init__(self, opt)
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
-        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake', 'reg', 'other']
+        self.loss_names = ['G_GAN', 'G_L1', 'D_real', 'D_fake', 'reg', 'other', 'integ']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
-        self.visual_names = ['real_A', 'fake_B', 'real_B']
+        self.visual_names = ['real_A', 'real_B']
         #self.visual_names = ['fake_B']
-        # specify the extra data you want to save
-        self.extra_data_names = ['extra_data']
         # Whether use L1 mask loss
         self.mask_loss = opt.mask_L1_loss
         # Whether use variation regularization term
@@ -95,9 +97,14 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         self.gen_height_diff = opt.gen_height_diff
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         if self.isTrain:
-            self.model_names = ['G', 'D', 'Branch1', 'Branch2']
+            self.model_names = ['G', 'D']
         else:  # during test time, only load G
-            self.model_names = ['G', 'Branch1', 'Branch2']
+            self.model_names = ['G']
+        if self.gen_height_diff:
+            self.model_names.append('Branch1')
+            self.model_names.append('Branch2')
+            # specify the extra data you want to save
+            self.extra_data_names = ['extra_data']
         # define networks (both generator and discriminator)
         if self.add_inner_random:
             inner_ap_nc = opt.inner_random_nc + (1 if self.avghi_loss else 0)
@@ -125,6 +132,7 @@ class Pix2PixDemHidiffGenModel(BaseModel):
             self.criterionLabel = torch.nn.CrossEntropyLoss()
             self.tv_regularization_term = kornia.losses.TotalVariation()
             self.dd_regularization_term = DirectionalDerivativeLoss()
+            self.integ_regularization_term = IntegIndepenPathLoss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             if self.gen_height_diff:
                 self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG.parameters(), self.netBranch1.parameters(), self.netBranch2.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -151,6 +159,7 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
+        self.real_B_grad = input['B_grad' if AtoB else 'A_grad'].to(self.device)
         if self.mask_loss:
             self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
         if self.dd_loss:
@@ -189,7 +198,7 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         pred_fake = self.netD(fake_AB.detach())
         self.loss_D_fake = self.criterionGAN(pred_fake, False)
         # Real
-        real_AB = torch.cat((self.real_A, self.real_B), 1)
+        real_AB = torch.cat((self.real_A, self.real_B_grad), 1)
         pred_real = self.netD(real_AB)
         self.loss_D_real = self.criterionGAN(pred_real, True)
         # combine loss and calculate gradients
@@ -202,12 +211,14 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         fake_AB = torch.cat((self.real_A, self.fake_B), 1)
         pred_fake = self.netD(fake_AB)
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
+        # dP/dy = dG/dx
+        self.loss_integ = self.integ_regularization_term(self.fake_B) * self.opt.lambda_integ
         # Second, G(A) = B
         if self.mask_loss:
             self.loss_G_L1 = self.criterionL1(self.real_A_mask * self.fake_B,
-                                              self.real_A_mask * self.real_B) * self.opt.lambda_L1
+                                              self.real_A_mask * self.real_B_grad) * self.opt.lambda_L1
         else:
-            self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
+            self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B_grad) * self.opt.lambda_L1
 
         # Regularization term
         self.loss_reg = 0
@@ -234,7 +245,7 @@ class Pix2PixDemHidiffGenModel(BaseModel):
             loss_hidiff = self.criterionLabel(self.hidiff, self.hidiff_idx.long())
             self.loss_other += loss_hidiff
         # combine loss and calculate gradients
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_reg + self.loss_other
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_reg + self.loss_other + self.loss_integ
         self.loss_G.backward()
 
     def optimize_parameters(self):
@@ -249,3 +260,36 @@ class Pix2PixDemHidiffGenModel(BaseModel):
         self.optimizer_G.zero_grad()        # set G's gradients to zero
         self.backward_G()                   # calculate graidents for G
         self.optimizer_G.step()             # udpate G's weights
+
+    def get_current_visuals_with_norm(self):
+        """Return visualization images. train.py will display these images with visdom, and save the images to a HTML"""
+        visual_ret = OrderedDict()
+        norm_ret = OrderedDict()
+        for visual_name in self.visual_names:
+            if isinstance(visual_name, str):
+                visual_ret[visual_name] = getattr(self, visual_name)
+                norm_name = visual_name + '_norm'
+                if isinstance(norm_name, str):
+                    norm_ret[visual_name] = getattr(self, norm_name, None)
+
+        self.real_B_grad_Show = IntegralGrad.to_grad_norm(self.real_B_grad)
+        visual_ret['real_B_grad_Show'] = self.real_B_grad_Show
+        norm_ret['real_B_grad_Show'] = self.real_B_norm
+
+        real_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, self.real_B_grad, buttom=-1)
+        real_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, self.real_B_grad, buttom=-1)
+        self.real_B_Integ_Show = (real_B_Integ_x2y + real_B_Integ_y2x) * 0.5
+        visual_ret['real_B_Integ_Show'] = self.real_B_Integ_Show
+        norm_ret['real_B_Integ_Show'] = self.real_B_norm
+
+        self.fake_B_grad_Show = IntegralGrad.to_grad_norm(self.fake_B)
+        visual_ret['fake_B_grad_Show'] = self.fake_B_grad_Show
+        norm_ret['fake_B_grad_Show'] = self.real_B_norm
+
+        fake_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, self.fake_B, buttom=-1)
+        fake_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, self.fake_B, buttom=-1)
+        self.fake_B_Integ_Show = (fake_B_Integ_x2y + fake_B_Integ_y2x) * 0.5
+        visual_ret['fake_B_Integ_Show'] = self.fake_B_Integ_Show
+        norm_ret['fake_B_Integ_Show'] = self.real_B_norm
+
+        return {'visuals': visual_ret, 'norms': norm_ret}
