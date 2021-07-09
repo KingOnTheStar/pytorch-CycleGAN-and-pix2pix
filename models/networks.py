@@ -217,6 +217,8 @@ def define_exp_G(input_nc, output_nc, ngf, netG, net_branch_num=3, inner_ap_nc=0
         net = UpsamplingResnetBranchGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     elif netG == 'label_resnet_branch_9blocks':
         net = LabelBranchGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+    elif netG == 'resnet_9blocks_leakRelu':
+        net = LeakReluResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)

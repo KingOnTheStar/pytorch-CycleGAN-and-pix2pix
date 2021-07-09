@@ -13,8 +13,8 @@ class IntegralGrad:
         return
 
     @staticmethod
-    def grad_merge(grad_x_mtx, grad_y_mtx):
-        grad_mtx = torch.cat((grad_x_mtx, grad_y_mtx), dim=-3)
+    def grad_merge(grad_x_mtx, grad_y_mtx, dim=-3):
+        grad_mtx = torch.cat((grad_x_mtx, grad_y_mtx), dim=dim)
         return grad_mtx
 
     @staticmethod
@@ -22,6 +22,35 @@ class IntegralGrad:
         grad_x_mtx = grad_mtx[..., 0:1, :, :]
         grad_y_mtx = grad_mtx[..., 1:2, :, :]
         return grad_x_mtx, grad_y_mtx
+
+    @staticmethod
+    def get_gradien_from_img(pic, grad_norm):
+        ori_img = np.array(pic)
+        if ori_img.ndim == 2:
+            # if 2D image, add channel dimension (HWC)
+            ori_img = np.expand_dims(ori_img, 2)
+        pad_ori_img = np.pad(ori_img, ((0, 1), (0, 1), (0, 0)), 'edge')
+        grad_mtx = IntegralGrad.get_gradien_img(pad_ori_img)
+        grad_mtx = IntegralGrad.normalize(grad_mtx, grad_norm)
+        grad_mtx = grad_mtx.permute(2, 0, 1)
+        return grad_mtx
+
+    @staticmethod
+    def normalize(grad_mtx, grad_norm):
+        if grad_norm['need_norm']:
+            grad_mtx /= 20.0
+            # grad_mtx /= (255.0 * 0.5)
+            # grad_std = torch.tensor(grad_norm['std'])
+            # grad_mean = torch.tensor(grad_norm['mean'])
+            # grad_mtx = (grad_mtx - grad_mean) / grad_std
+        return grad_mtx
+
+    @staticmethod
+    def get_gradien_img(ori_img):
+        ori_mtx = torch.tensor(ori_img).float()
+        grad_x_mtx = ori_mtx[:-1, 1:, :] - ori_mtx[:-1, :-1, :]
+        grad_y_mtx = ori_mtx[1:, :-1, :] - ori_mtx[:-1, :-1, :]
+        return IntegralGrad.grad_merge(grad_x_mtx, grad_y_mtx, dim=-1)
 
     @staticmethod
     def get_gradien(ori_mtx):
@@ -54,7 +83,7 @@ class IntegralGrad:
         return grad_img
 
     @staticmethod
-    def integral_grad_path_x2y_auto_C(ori_mtx, grad_mtx, buttom=0):
+    def integral_grad_path_x2y_auto_C(ori_mtx, grad_mtx, bottom=0):
         integrated_mtx = 0 * ori_mtx
         grad_x_mtx, grad_y_mtx = IntegralGrad.grad_split(grad_mtx)
 
@@ -63,19 +92,19 @@ class IntegralGrad:
         for x in range(0, width):
             for y in range(0, height):
                 if x == 0 and y == 0:
-                    integrated_mtx[..., 0, y, x] = buttom
+                    integrated_mtx[..., 0, y, x] = bottom
                 elif y == 0:
                     integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y, x - 1] + grad_x_mtx[..., 0, y, x - 1]
                 else:
                     integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y - 1, x] + grad_y_mtx[..., 0, y - 1, x]
 
         min_val = torch.min(integrated_mtx)
-        if min_val < buttom:
-            integrated_mtx += (buttom - min_val)
+        if min_val < bottom:
+            integrated_mtx += (bottom - min_val)
         return integrated_mtx
 
     @staticmethod
-    def integral_grad_path_y2x_auto_C(ori_mtx, grad_mtx, buttom=0):
+    def integral_grad_path_y2x_auto_C(ori_mtx, grad_mtx, bottom=0):
         integrated_mtx = 0 * ori_mtx
         grad_x_mtx, grad_y_mtx = IntegralGrad.grad_split(grad_mtx)
 
@@ -84,15 +113,15 @@ class IntegralGrad:
         for y in range(0, height):
             for x in range(0, width):
                 if x == 0 and y == 0:
-                    integrated_mtx[..., 0, y, x] = buttom
+                    integrated_mtx[..., 0, y, x] = bottom
                 elif x == 0:
                     integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y - 1, x] + grad_y_mtx[..., 0, y - 1, x]
                 else:
                     integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y, x - 1] + grad_x_mtx[..., 0, y, x - 1]
 
         min_val = torch.min(integrated_mtx)
-        if min_val < buttom:
-            integrated_mtx += (buttom - min_val)
+        if min_val < bottom:
+            integrated_mtx += (bottom - min_val)
         return integrated_mtx
 
     @staticmethod
@@ -105,11 +134,11 @@ class IntegralGrad:
         for x in range(0, width):
             for y in range(0, height):
                 if x == 0 and y == 0:
-                    integrated_mtx[..., 0, x, y] = 0
+                    integrated_mtx[..., 0, y, x] = 0
                 elif y == 0:
-                    integrated_mtx[..., 0, x, y] = integrated_mtx[..., 0, x - 1, y] + grad_x_mtx[..., 0, x - 1, y]
+                    integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y, x - 1] + grad_x_mtx[..., 0, y, x - 1]
                 else:
-                    integrated_mtx[..., 0, x, y] = integrated_mtx[..., 0, x, y - 1] + grad_y_mtx[..., 0, x, y - 1]
+                    integrated_mtx[..., 0, y, x] = integrated_mtx[..., 0, y - 1, x] + grad_y_mtx[..., 0, y - 1, x]
         return integrated_mtx
 
     @staticmethod

@@ -1,6 +1,6 @@
 import os
-from data.base_dataset import BaseDataset, get_transform, GlobalTransParams
-from data.image_folder import make_dataset
+from data.base_dataset import BaseDataset, get_transform, get_transform_convert_only, GlobalTransParams
+from data.image_folder import make_dataset, make_np_dataset
 from PIL import Image
 import pandas as pd
 import random
@@ -35,6 +35,10 @@ class StrtdemDerivativeAndIntegralDataset(BaseDataset):
         self.B_paths = sorted(make_dataset(self.dir_B, opt.max_dataset_size))    # load images from '/path/to/data/trainB'
         self.A_size = len(self.A_paths)  # get the size of dataset A
         self.B_size = len(self.B_paths)  # get the size of dataset B
+
+        # self.dir_B_grad = os.path.join(opt.dataroot, 'Tmp/gradiens')
+        # self.B_grad_paths = sorted(make_np_dataset(self.dir_B_grad, opt.max_dataset_size))
+        # self.B_grad_size = len(self.B_grad_paths)
 
         self.crop_pos_max = opt.load_size - opt.crop_size
         self.dd_loss = opt.dd_loss
@@ -83,9 +87,11 @@ class StrtdemDerivativeAndIntegralDataset(BaseDataset):
         params = {'crop_global': True, 'flip_global': True}
         self.strt_normal_params = {'need_norm': True, 'mean': (0.5, 0.5, 0.5),
                               'std': (0.5, 0.5, 0.5)}
-        self.dem_normal_params = {'need_norm': True, 'mean': 0.5, 'std': 0.5}
+        self.dem_normal_params = {'need_norm': True, 'mean': (0.5,), 'std': (0.5,)}
+        self.grad_normal_params = {'need_norm': True, 'mean': (2.2828603e-05, 1.8738519e-06), 'std': (0.00253269, 0.00235214)}
         self.transform_A = get_transform(self.opt, params=params, grayscale=(input_nc == 1), normal_params=self.strt_normal_params)
-        self.transform_B = get_transform(self.opt, params=params, grayscale=True, normal_params=self.dem_normal_params)
+        self.transform_B_part1 = get_transform(self.opt, params=params, grayscale=True, convert=None)
+        self.transform_B_part2 = get_transform_convert_only(grayscale=True, normal_params=self.dem_normal_params)
         self.transform_A_mask = get_transform(self.opt, params=params, grayscale=True,
                                               normal_params={'need_norm': False},
                                               custom_tensor_fun=self.preprocessing)
@@ -117,12 +123,22 @@ class StrtdemDerivativeAndIntegralDataset(BaseDataset):
                                       random.randint(0, self.crop_pos_max))
         GlobalTransParams.flip = True if random.random() > 0.5 else False
         # apply image transformation
+        # A = self.transform_A(A_img)
         A = self.transform_A(A_img)
-        B = self.transform_B(B_img)
 
-        B_grad = IntegralGrad.get_gradien(B)
-        print('min: ' + str(torch.min(B_grad)))
-        print('max: ' + str(torch.max(B_grad)))
+        # M1
+        # B_part1 = self.transform_B_part1(B_img)
+        # B = self.transform_B_part2(B_part1)
+        # B_grad = IntegralGrad.get_gradien(B)
+
+        # Read B gradien M2
+        B_part1 = self.transform_B_part1(B_img)
+        B_grad = IntegralGrad.get_gradien_from_img(B_part1, self.grad_normal_params)
+        B = self.transform_B_part2(B_part1)
+
+        # B_grad_path = self.B_grad_paths[index % self.B_grad_size]
+        # grad_np = np.load(B_grad_path)
+        # B_grad = self.transform_B_grad(grad_np)
 
         ret = {'A': A, 'B': B, 'B_grad': B_grad, 'A_paths': A_path, 'B_paths': B_path}
 
@@ -172,7 +188,8 @@ class StrtdemDerivativeAndIntegralDataset(BaseDataset):
         return max(self.A_size, self.B_size)
 
     def get_preinput(self):
-        preinput = {'A_norm': self.strt_normal_params, 'B_norm': self.dem_normal_params}
+        preinput = {'A_norm': self.strt_normal_params, 'B_norm': self.dem_normal_params,
+                    'B_grad_norm': self.grad_normal_params}
         return preinput
 
     def preprocessing(self, data_tensor):

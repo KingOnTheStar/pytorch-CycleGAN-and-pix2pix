@@ -10,7 +10,7 @@ from collections import OrderedDict
 from data.complex_data_processing.integral_grad import *
 
 
-class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
+class Pix2PixWGanDemGIModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
     The model training requires '--dataset_mode aligned' dataset.
@@ -56,6 +56,8 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
         parser.add_argument('--hidiff_upsampling_netG_branch', type=str, default='upsampling_resnet_branch_9blocks', help='netG used with --gen_height_diff parameter')
         parser.add_argument('--hidiff_label_netG_branch', type=str, default='label_resnet_branch_9blocks', help='netG used with --gen_height_diff parameter')
         parser.add_argument('--hidiff_output_nc', type=int, default=5, help='the length of output channel of label resnet')
+        parser.add_argument('--critic_iter', type=int, default=5, help='WGAN iter number when train Discriminator')
+        parser.add_argument('--weight_cliping_limit', type=float, default=0.01, help='WGAN Discriminator clip value')
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
             parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
@@ -63,7 +65,7 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
             parser.add_argument('--lambda_ddreg', type=float, default=1.0, help='weight for DD regularization term')
             parser.add_argument('--lambda_avghi', type=float, default=30.0, help='weight for average height loss')
             parser.add_argument('--lambda_wam', type=float, default=100.0, help='weight for water area and edge loss')
-            parser.add_argument('--lambda_integ', type=float, default=0.01, help='weight for integral independ to path loss')
+            parser.add_argument('--lambda_integ', type=float, default=0.1, help='weight for integral independ to path loss')
 
         return parser
 
@@ -161,6 +163,7 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
         self.real_B_grad = input['B_grad' if AtoB else 'A_grad'].to(self.device)
+        self.iter = input['iter']
         if self.mask_loss:
             self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
         if self.dd_loss:
@@ -253,13 +256,22 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
         # update D
         self.set_requires_grad(self.netD, True)  # enable backprop for D
         self.optimizer_D.zero_grad()     # set D's gradients to zero
+        # Clamp parameters to a range [-c, c], c=self.weight_cliping_limit
+        # for p in self.netD.parameters():
+        #     p.data.clamp_(-self.opt.weight_cliping_limit, self.opt.weight_cliping_limit)
         self.backward_D()                # calculate gradients for D
         self.optimizer_D.step()          # update D's weights
-        # update G
+
         self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
-        self.optimizer_G.zero_grad()        # set G's gradients to zero
-        self.backward_G()                   # calculate graidents for G
-        self.optimizer_G.step()             # udpate G's weights
+        self.optimizer_G.zero_grad()  # set G's gradients to zero
+        self.backward_G()  # calculate graidents for G
+        self.optimizer_G.step()  # udpate G's weights
+        # if self.iter % self.opt.critic_iter == 0:
+        #     # update G
+        #     self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
+        #     self.optimizer_G.zero_grad()  # set G's gradients to zero
+        #     self.backward_G()  # calculate graidents for G
+        #     self.optimizer_G.step()  # udpate G's weights
 
     def get_current_visuals_with_norm(self):
         """Return visualization images. train.py will display these images with visdom, and save the images to a HTML"""
@@ -279,8 +291,25 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
 
         # denormed_real_B_grad = 255.0 * (self.real_B_grad.permute(0, 2, 3, 1) * std + mean).permute(0, 3, 1, 2)
         # denormed_fake_B = 255.0 * (self.fake_B.permute(0, 2, 3, 1) * std + mean).permute(0, 3, 1, 2)
-        denormed_real_B_grad = 20 * (self.real_B_grad.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-        denormed_fake_B = 20.0 * (self.fake_B.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+        bottom = 0
+        norm_method = no_norm
+        dfdx_scale = 20.0
+        scale = 255.0
+        denormed_real_B_grad = dfdx_scale * (self.real_B_grad.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        denormed_fake_B = dfdx_scale * (self.fake_B.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+        # bottom = 255.0 * -1
+        # scale = 255.0
+        # norm_method = no_norm
+        # denormed_real_B_grad = scale * (self.real_B_grad.permute(0, 2, 3, 1) * 0.5).permute(0, 3, 1, 2)
+        # denormed_fake_B = scale * (self.fake_B.permute(0, 2, 3, 1) * 0.5).permute(0, 3, 1, 2)
+
+        # bottom = 0
+        # scale = 255.0
+        # norm_method = no_norm
+        # denormed_real_B_grad = scale * 0.5 * (self.real_B_grad.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        # denormed_fake_B = scale * 0.5 * (self.fake_B.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
         # t1min = torch.min(denormed_real_B_grad)
         # t1max = torch.max(denormed_real_B_grad)
@@ -292,23 +321,23 @@ class Pix2PixDemDerivativeAndIntegralModel(BaseModel):
         # t4max = torch.max(self.fake_B)
 
         self.real_B_grad_Show = IntegralGrad.to_grad_norm(denormed_real_B_grad)
-        visual_ret['real_B_grad_Show'] = self.real_B_grad_Show / 255.0
-        norm_ret['real_B_grad_Show'] = no_norm
+        visual_ret['real_B_grad_Show'] = self.real_B_grad_Show / scale
+        norm_ret['real_B_grad_Show'] = norm_method
 
-        real_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, denormed_real_B_grad, buttom=0)
-        real_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, denormed_real_B_grad, buttom=0)
+        real_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, denormed_real_B_grad, bottom=bottom)
+        real_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, denormed_real_B_grad, bottom=bottom)
         self.real_B_Integ_Show = (real_B_Integ_x2y + real_B_Integ_y2x) * 0.5
-        visual_ret['real_B_Integ_Show'] = self.real_B_Integ_Show / 255.0
-        norm_ret['real_B_Integ_Show'] = no_norm
+        visual_ret['real_B_Integ_Show'] = self.real_B_Integ_Show / scale
+        norm_ret['real_B_Integ_Show'] = norm_method
 
         self.fake_B_grad_Show = IntegralGrad.to_grad_norm(denormed_fake_B)
-        visual_ret['fake_B_grad_Show'] = self.fake_B_grad_Show / 255.0
-        norm_ret['fake_B_grad_Show'] = no_norm
+        visual_ret['fake_B_grad_Show'] = self.fake_B_grad_Show / scale
+        norm_ret['fake_B_grad_Show'] = norm_method
 
-        fake_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, denormed_fake_B, buttom=0)
-        fake_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, denormed_fake_B, buttom=0)
+        fake_B_Integ_x2y = IntegralGrad.integral_grad_path_x2y_auto_C(self.real_B, denormed_fake_B, bottom=bottom)
+        fake_B_Integ_y2x = IntegralGrad.integral_grad_path_y2x_auto_C(self.real_B, denormed_fake_B, bottom=bottom)
         self.fake_B_Integ_Show = (fake_B_Integ_x2y + fake_B_Integ_y2x) * 0.5
-        visual_ret['fake_B_Integ_Show'] = self.fake_B_Integ_Show / 255.0
-        norm_ret['fake_B_Integ_Show'] = no_norm
+        visual_ret['fake_B_Integ_Show'] = self.fake_B_Integ_Show / scale
+        norm_ret['fake_B_Integ_Show'] = norm_method
 
         return {'visuals': visual_ret, 'norms': norm_ret}

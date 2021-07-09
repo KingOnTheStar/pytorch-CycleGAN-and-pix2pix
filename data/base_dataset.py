@@ -140,6 +140,20 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC,
     return transforms.Compose(transform_list)
 
 
+def get_transform_convert_only(grayscale=False, normal_params=None):
+    transform_list = []
+    transform_list += [transforms.ToTensor()]
+    transforms.ToTensor()
+    if normal_params is None:
+        if grayscale:
+            transform_list += [transforms.Normalize((0.5,), (0.5,))]
+        else:
+            transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    elif normal_params['need_norm']:
+        transform_list += [transforms.Normalize(normal_params['mean'], normal_params['std'])]
+    return transforms.Compose(transform_list)
+
+
 def __make_power_2(img, base, method=Image.BICUBIC):
     ow, oh = img.size
     h = int(round(oh / base) * base)

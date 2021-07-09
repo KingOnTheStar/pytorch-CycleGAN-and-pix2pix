@@ -15,9 +15,17 @@ IMG_EXTENSIONS = [
     '.tif', '.TIF', '.tiff', '.TIFF',
 ]
 
+NP_EXTENSIONS = [
+    '.npy',
+]
+
 
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+
+
+def is_np_file(filename):
+    return any(filename.endswith(extension) for extension in NP_EXTENSIONS)
 
 
 def make_dataset(dir, max_dataset_size=float("inf")):
@@ -30,6 +38,18 @@ def make_dataset(dir, max_dataset_size=float("inf")):
                 path = os.path.join(root, fname)
                 images.append(path)
     return images[:min(max_dataset_size, len(images))]
+
+
+def make_np_dataset(dir, max_dataset_size=float("inf")):
+    np_arrays = []
+    assert os.path.isdir(dir), '%s is not a valid directory' % dir
+
+    for root, _, fnames in sorted(os.walk(dir)):
+        for fname in fnames:
+            if is_np_file(fname):
+                path = os.path.join(root, fname)
+                np_arrays.append(path)
+    return np_arrays[:min(max_dataset_size, len(np_arrays))]
 
 
 def default_loader(path):
